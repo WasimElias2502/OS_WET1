@@ -2,7 +2,7 @@
 #define SMASH_COMMAND_H_
 
 #include <vector>
-
+#include <memory>
 #define COMMAND_ARGS_MAX_LENGTH (200)
 #define COMMAND_MAX_ARGS (20)
 #define MAX_CHARACTERS_INDIR (80)
@@ -14,7 +14,7 @@ protected:
     char* arguments[COMMAND_MAX_ARGS+1];
     int numArgs;
 public:
-    const char* cmd_line;
+    char cmd_line[COMMAND_ARGS_MAX_LENGTH+1];
     Command(const char* cmd_line);
     virtual ~Command();
     virtual void execute() = 0;
@@ -33,7 +33,7 @@ public:
 class ExternalCommand : public Command {
 
 public:
-    const char* OriginalCmdLine;
+    //const char* OriginalCmdLine;
     ExternalCommand(const char* cmd_line);
     virtual ~ExternalCommand() {}
     void execute() override;
@@ -63,9 +63,9 @@ public:
 
 class ChangeDirCommand : public BuiltInCommand {
 // TODO: Add your data members
-    char** lastDir;
+    char* lastDir;
 public:
-    ChangeDirCommand(const char* cmd_line, char** plastPwd);
+    ChangeDirCommand(const char* cmd_line, char* plastPwd);
     virtual ~ChangeDirCommand() {}
     void execute() override;
 };
@@ -112,6 +112,9 @@ public:
 
 
         JobEntry(int jobId , pid_t processId , Command* cmd_line) : jobId(jobId) , processId(processId) , cmd_line(cmd_line) {}
+        ~JobEntry (){
+            if(cmd_line != nullptr) delete cmd_line;
+        }
 
         bool operator>( const JobEntry& job2){
             return jobId > job2.jobId;
@@ -131,7 +134,7 @@ public:
 
 
 
-    std::vector<JobEntry> listOfJobs;
+    std::vector<std::shared_ptr<JobEntry>> listOfJobs;
     int numOfJobs ;
 
 public:
@@ -203,11 +206,12 @@ public:
 class SmallShell {
 private:
     // TODO: Add your data members
-    char** lastDir;
+
     JobsList jobsInShell;
 
     SmallShell();
 public:
+    char* lastDir;
     std::string prompt ;
     static pid_t smashPid ;
     Command *CreateCommand(const char* cmd_line);

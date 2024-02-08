@@ -101,6 +101,7 @@ bool IsComplexExternalCmd(const char* cmd_line){
     int i=0;
     while(cmd_line[i] != '\0'){
         if(cmd_line[i] == '*' || cmd_line[i] == '?') return true;
+        i++;
     }
     return false;
 }
@@ -141,15 +142,18 @@ int checkRedirection(const char* cmd_line){
 SmallShell::SmallShell() {
 // TODO: add your implementation
     prompt = "smash";
+    lastDir = nullptr;
 }
 
 SmallShell::~SmallShell() {
 // TODO: add your implementation
+    if(lastDir != nullptr ) delete lastDir;
 }
 
 /**
 * Creates and returns a pointer to Command class which matches the given command line (cmd_line)
 */
+
 Command * SmallShell::CreateCommand(const char* cmd_line) {
     // For example:
 
@@ -198,9 +202,11 @@ Command * SmallShell::CreateCommand(const char* cmd_line) {
         ////////////
 
         pid_t currPid = fork();
-
+        int status;
         if (currPid == 0){
+
             return new ExternalCommand(cmd_line);
+
         }
         else if(currPid > 0) {
             if (_isBackgroundComamnd(cmd_line)){
@@ -208,10 +214,9 @@ Command * SmallShell::CreateCommand(const char* cmd_line) {
                 strcpy(cmdWOBackGround,cmd_line);
                 _removeBackgroundSign(cmdWOBackGround);
                 strcpy(cmdWOBackGround, _trim(cmdWOBackGround).c_str());
-                jobsInShell.addJob(new ExternalCommand(cmdWOBackGround),currPid);
+                jobsInShell.addJob(new ExternalCommand(cmd_line),currPid);
             }
             else{
-                int status;
                 pid_t childProcess = waitpid(currPid, &status,0);
                 if(childProcess == -1){
                     perror( "smash error: waitpid failed");
@@ -247,7 +252,9 @@ void SmallShell::executeCommand(const char *cmd_line) {
 
 /////////////////////////////////Command//////////////////////////////////////////////
 
-Command::Command(const char *cmd_line) : numArgs(0) , cmd_line(cmd_line){
+Command::Command(const char *cmd_line) : numArgs(0) {
+
+    strcpy(this->cmd_line , cmd_line);
 
     for(int i=0 ; i<=COMMAND_MAX_ARGS ; i++){
         arguments[i] = nullptr;
@@ -262,7 +269,7 @@ Command::~Command() {
         if(arguments[i] != nullptr) delete arguments[i] ;
     }
 
-    delete cmd_line;
+    // delete cmd_line;
 }
 
 
@@ -277,7 +284,7 @@ BuiltInCommand::BuiltInCommand(const char *cmd_line) : Command(cmd_line){}
 
 /////////////////////////Change Directory/////////////////////////////////////////////
 
-ChangeDirCommand::ChangeDirCommand(const char *cmd_line, char **plastPwd) : BuiltInCommand(cmd_line) {
+ChangeDirCommand::ChangeDirCommand(const char *cmd_line, char *plastPwd) : BuiltInCommand(cmd_line) {
     lastDir = plastPwd ;
 }
 
@@ -290,19 +297,25 @@ void ChangeDirCommand::execute() {
         }
         return;
     }
+
+    char* buffer = nullptr;
+
     /////go to last directory
-    if(arguments[1] == "-"){
-        if(lastDir == nullptr){////
+    if(strcmp(arguments[1],"-") == 0){
+        if(lastDir == nullptr ){////
             cerr<<"smash error: cd: OLDPWD not set"<< endl;
             return;
         }
         else{
-            char* buffer = new char[MAX_CHARACTERS_INDIR+1];
-            if(getcwd(buffer,sizeof(buffer)) != nullptr){
-                chdir(*lastDir);                                                                                           ///////////////check if failed later
-                if (*lastDir) {
-                    delete lastDir;
-                    lastDir = &buffer;
+            size_t BufferSize = (size_t) (MAX_CHARACTERS_INDIR+1);
+            buffer = new char[BufferSize];
+            if(getcwd(buffer,BufferSize) != nullptr){
+                if (chdir(lastDir) == -1) perror("smash error: chdir failed");                                                                                           ///////////////check if failed later
+                if (lastDir) {
+                    // delete SmallShell::getInstance().lastDir;
+                    lastDir = buffer;
+                    strcpy(SmallShell::getInstance().lastDir,buffer);
+                    if(buffer != nullptr) delete buffer;
                     return;
                 }
             }
@@ -316,13 +329,20 @@ void ChangeDirCommand::execute() {
 
         ///// retrun to parent directory
 
-    else if( arguments[1] == ".."){
-        char* buffer = new char[MAX_CHARACTERS_INDIR+1];
-        if(getcwd(buffer,sizeof(buffer)) != nullptr){
+    else if( strcmp(arguments[1],"..") == 0){
+        size_t BufferSize = (size_t) (MAX_CHARACTERS_INDIR+1);
+        buffer = new char[BufferSize];
+        if(getcwd(buffer,BufferSize) != nullptr){
             char* parentPath = GetParentDirectory(buffer);
-            chdir(parentPath);                                                                                         ////////////SYSFAIL check
-            if(lastDir != nullptr) delete lastDir;
-            lastDir = &buffer;
+            if(chdir(parentPath) == -1){
+                perror("smash error: chdir failed");
+            }                                                                                         ////////////SYSFAIL check
+            // if(lastDir != nullptr) delete SmallShell::getInstance().lastDir;
+            lastDir = buffer;
+            if(SmallShell::getInstance().lastDir == nullptr) SmallShell::getInstance().lastDir = new char[MAX_CHARACTERS_INDIR+1];
+
+            strcpy(SmallShell::getInstance().lastDir,buffer);
+            if(buffer != nullptr) delete buffer;
             if(parentPath != nullptr) delete parentPath;
         }
         else{
@@ -332,14 +352,17 @@ void ChangeDirCommand::execute() {
     }
 
     else{
-        char* buffer = new char[MAX_CHARACTERS_INDIR+1];
-        if(getcwd(buffer,sizeof(buffer)) != nullptr){
-            lastDir = &buffer;
+        size_t BufferSize = (size_t) (MAX_CHARACTERS_INDIR+1);
+        buffer = new char[BufferSize];
+        if(getcwd(buffer,BufferSize) != nullptr){
+            lastDir = buffer;
+            if(SmallShell::getInstance().lastDir == nullptr) SmallShell::getInstance().lastDir = new char[MAX_CHARACTERS_INDIR+1];
+            strcpy(SmallShell::getInstance().lastDir,buffer);
         }
         else{
             perror("smash error: getcwd failed");
         }
-        chdir(arguments[1]);
+        if (chdir(arguments[1]) == -1) perror("smash error: chdir failed");
     }
     return;
 }
@@ -448,8 +471,8 @@ void QuitCommand::execute() {
     char* killArg = arguments[1];
 
     ///Kill not specified Or Argument Specified but not kill
-    if(killArg == NULL  || killArg != "kill"){
-        exit(0);
+    if(killArg == NULL  || strcmp(killArg,"kill") != 0){
+        exit(1);
     }
 
 
@@ -461,8 +484,10 @@ void QuitCommand::execute() {
         auto iterator = jobs->listOfJobs.begin();
 
         for(; iterator != jobs->listOfJobs.end() ; ++iterator){
-            cout << iterator->processId << ": " << iterator->cmd_line << endl;
+            cout << (*iterator)->processId << ": " << (*iterator)->cmd_line->cmd_line << endl;
+            kill((*iterator)->processId, 9);
         }
+        exit(1);
     }
 }
 
@@ -493,15 +518,15 @@ void ForegroundCommand::execute() {
         // Check if the vector is not empty before accessing the result
         if (maxElement != jobs->listOfJobs.end()) {
 
-            cout<<cmd_line<<" "<<maxElement->processId<<endl;
+            cout<<(*maxElement)->cmd_line->cmd_line<<" "<<(*maxElement)->processId<<endl;
 
             ///Wait Failed
-            if(waitpid(maxElement->processId,&status,0) == -1){
+            if(waitpid((*maxElement)->processId,&status,0) == -1){
                 perror("smash error: waitpid failed");
                 return;
             }
 
-            jobs->removeJobById(maxElement->jobId);
+            jobs->removeJobById((*maxElement)->jobId);
             return;
 
         } else {
@@ -526,8 +551,7 @@ void ForegroundCommand::execute() {
 
         auto iterator = jobs->listOfJobs.begin();
         for(; iterator != jobs->listOfJobs.end(); ++iterator){
-            if(iterator->jobId == jobIdToMove);
-            break;
+            if((*iterator)->jobId == jobIdToMove) break;
         }
 
         ///didnt find job with jobIdToMove
@@ -539,15 +563,15 @@ void ForegroundCommand::execute() {
             ///found job with jobIdToMove
         else{
 
-            cout<<cmd_line<<" "<<iterator->processId << endl;
+            cout<< (*iterator)->cmd_line->cmd_line <<" " <<(*iterator)->processId << endl;
 
             ///Wait Failed
-            if(waitpid(iterator->processId,&status,0) == -1){
+            if(waitpid((*iterator)->processId,&status,0) == -1){
                 perror("smash error: waitpid failed");
                 return;
             }
 
-            jobs->removeJobById(iterator->jobId);
+            jobs->removeJobById((*iterator)->jobId);
             return;
         }
     }
@@ -561,10 +585,12 @@ void ForegroundCommand::execute() {
 JobsCommand::JobsCommand(const char *cmd_line, JobsList *jobs) : BuiltInCommand(cmd_line) ,  jobs(jobs) {}
 
 void JobsCommand::execute() {
+
+    jobs->removeFinishedJobs();
+
     if (jobs == nullptr){
         return;
     }
-    jobs->removeFinishedJobs();
     jobs->printJobsList();
 }
 
@@ -585,7 +611,7 @@ void JobsList::printJobsList(){
 
     auto iterator = listOfJobs.begin();
     for ( ; iterator != listOfJobs.end() ; ++iterator){
-        cout << "[" << iterator->jobId << "] " << iterator->cmd_line->cmd_line << endl;
+        cout << "[" << (*iterator)->jobId << "] " << (*iterator)->cmd_line->cmd_line << endl;
     }
 }
 
@@ -598,22 +624,23 @@ void JobsList::addJob(Command *cmd,pid_t newJobpid ,bool isStopped) {
     int MaxJobId = 0;
     auto maxElement = std::max_element(listOfJobs.begin(), listOfJobs.end());
     if (maxElement != listOfJobs.end()) {
-        MaxJobId = maxElement->jobId;
+        MaxJobId = (*maxElement)->jobId;
     }
     else {
         MaxJobId=0;
     }
 
     ///////adding the new job
-    listOfJobs.push_back(JobEntry(MaxJobId+1,newJobpid, cmd));
+    listOfJobs.push_back(std::shared_ptr<JobEntry>(new JobEntry(MaxJobId+1,newJobpid, cmd)));
+    //numOfJobs++;
 
 }
 
 JobsList::JobEntry * JobsList::getJobById(int jobId){
     auto iterator = listOfJobs.begin();
     for ( ; iterator != listOfJobs.end() ; ++iterator){
-        if (iterator->jobId == jobId){
-            return &(*iterator);
+        if ((*iterator)->jobId == jobId){
+            return (*iterator).get();
         }
     }
     return nullptr;
@@ -622,7 +649,7 @@ JobsList::JobEntry * JobsList::getJobById(int jobId){
 void JobsList::removeJobById(int jobId){
     auto iterator = listOfJobs.begin();
     for ( ; iterator != listOfJobs.end() ; ++iterator){
-        if (iterator->jobId == jobId){
+        if ((*iterator)->jobId == jobId){
             listOfJobs.erase(iterator);
             return;
         }
@@ -633,7 +660,7 @@ void JobsList::removeJobById(int jobId){
 void JobsList::killAllJobs(){
     auto iterator = listOfJobs.begin();
     for( ;iterator != listOfJobs.end() ; ++iterator){
-        if(kill(iterator->processId , SIGKILL) == -1){
+        if(kill((*iterator)->processId , SIGKILL) == -1){
             perror("smash error: kill failed");
         }
     }
@@ -648,13 +675,13 @@ void JobsList::removeFinishedJobs(){
     auto iterator = listOfJobs.begin();
     pid_t deadProcess;
 
-    for( ; iterator != listOfJobs.end() ; ++iterator){
+    while(iterator != listOfJobs.end()){
 
-        deadProcess =  waitpid(iterator->processId, NULL, WNOHANG);
+        deadProcess =  waitpid((*iterator)->processId, NULL, WNOHANG);
 
         ///// is Zombie
         if(deadProcess > 0){
-            listOfJobs.erase(iterator);
+            iterator = listOfJobs.erase(iterator);
         }
             //// waitpid
         else if (deadProcess == -1){
@@ -662,7 +689,7 @@ void JobsList::removeFinishedJobs(){
             return;
         }
         else if (deadProcess == 0){
-            return;
+            ++iterator;
         }
     }
 }
@@ -671,9 +698,34 @@ void JobsList::removeFinishedJobs(){
 
 //////////////////////////////////External Command//////////////////////////////////////////////
 
-ExternalCommand::ExternalCommand(const char *cmd_line) : Command(cmd_line) , OriginalCmdLine(cmd_line){}
+ExternalCommand::ExternalCommand(const char *cmd_line) :Command(cmd_line){
+
+    char* IgnoreAmpersand = new char[COMMAND_ARGS_MAX_LENGTH];
+    strcpy(IgnoreAmpersand,cmd_line);
+    _removeBackgroundSign(IgnoreAmpersand);
+    string Copy = IgnoreAmpersand;
+    Copy = _trim(Copy);
+    strcpy(IgnoreAmpersand , Copy.c_str());
+
+
+    for(int i=0 ; i<=COMMAND_MAX_ARGS ; i++){
+        arguments[i] = nullptr;
+    }
+
+    numArgs = _parseCommandLine(IgnoreAmpersand,arguments);
+
+}
 
 void ExternalCommand::execute() {
+
+
+
+    char* BuiltInIgnoreAmpersand = new char[COMMAND_ARGS_MAX_LENGTH];
+    strcpy(BuiltInIgnoreAmpersand,cmd_line);
+    _removeBackgroundSign(BuiltInIgnoreAmpersand);
+    string Copy = BuiltInIgnoreAmpersand;
+    Copy = _trim(Copy);
+    strcpy(BuiltInIgnoreAmpersand , Copy.c_str());
 
     //////////Command is Complex
     if(IsComplexExternalCmd(cmd_line)){
@@ -681,27 +733,37 @@ void ExternalCommand::execute() {
         strcpy(cmd_line_not_const, cmd_line);
         char CFlag[3] = {'-','c','\0'};
         char* argv[] = { CFlag, cmd_line_not_const , nullptr};           ///////////////////////////////////
-        if(execv("/bin/bash" , argv)==-1) perror("smash error: execv failed");
+        if(execv("/bin/bash" , argv)==-1) {
+            perror("smash error: execv failed");
+            exit(EXIT_FAILURE);
+        }
+
     }
 
         //////////////Command not complex
     else{
-        int res = execv(arguments[0] ,arguments);
-        if(res == -1) perror("smash error: execv failed");
+        int res = execvp(arguments[0] ,arguments);
+        if(res == -1) {
+            perror("smash error: execvp failed");
+            exit(EXIT_FAILURE);
+        }
+
+
     }
+
+    exit(0);
+
 }
 
 
 ///Redirection Command////////////////////////
 
-char* cutCMD(const char* cmd_line){
+void cutCMD(const char* cmd_line, char* ret_cmd){
     int i=0;
     std::string cmd_new(cmd_line);
     cmd_new = cmd_new.substr(0, cmd_new.find_first_of('>')-1);
     cmd_new = _trim(cmd_new);
-    char* ret_cmd;
     strcpy(ret_cmd, cmd_new.c_str());
-    return ret_cmd;
 }
 
 RedirectionCommand::RedirectionCommand(const char *cmd_line) : Command(cmd_line){}
@@ -712,7 +774,8 @@ void RedirectionCommand::execute() {
     prepare();
 
     ///Command execution
-    const char* cuttedCMD = cutCMD(cmd_line);
+    char cuttedCMD[COMMAND_ARGS_MAX_LENGTH+1];
+    cutCMD(cmd_line, cuttedCMD);
     Command* command = SmallShell::getInstance().CreateCommand(cuttedCMD);
 
     if(command != nullptr) {
@@ -727,9 +790,9 @@ void RedirectionCommand::execute() {
 ///Preparing the output stream
 void RedirectionCommand::prepare() {
 
-    try {
-        fdOfStdOut = dup(1);
-    }catch(...){
+
+    fdOfStdOut = dup(1);
+    if (fdOfStdOut == -1) {
         perror("smash error: dup failed");
         return;
     }
@@ -737,6 +800,8 @@ void RedirectionCommand::prepare() {
     ////CLOSE FAILED
     if(close(1) == -1) {
         perror("smash error: close failed");
+        dup2(fdOfStdOut, 1);
+        close(fdOfStdOut);
         return;
     }
 
@@ -744,21 +809,26 @@ void RedirectionCommand::prepare() {
 
     ////override = 1
     if (checkRedirection(cmd_line) == 1){
-        output = open(arguments[numArgs-1],O_WRONLY | O_CREAT);
-        if(output == -1){
-            perror("smash error: open failed");
-            return;
-        }
+        output = open(arguments[numArgs-1],O_WRONLY | O_CREAT, 0644);
     }
-
         /////append = 2
     else if(checkRedirection(cmd_line) == 2) {
-        output = open(arguments[numArgs - 1], O_WRONLY | O_APPEND | O_CREAT);
-        if (output == -1) {
-            perror("smash error: open failed");
-            return;
-        }
+        output = open(arguments[numArgs - 1], O_WRONLY | O_APPEND | O_CREAT, 0644);
     }
+
+        ////// not redirection
+    else{
+        dup2(fdOfStdOut, 1);
+        close(fdOfStdOut);
+        return;
+    }
+    if (output == -1){
+        perror("smash error: open failed");
+        dup2(fdOfStdOut, 1);
+        close(fdOfStdOut);
+        return;
+    }
+    return;
 }
 
 void RedirectionCommand::cleanup() {
@@ -766,13 +836,19 @@ void RedirectionCommand::cleanup() {
     ////CLOSE FAILED
     if(close(1) == -1) {
         perror("smash error: close failed");
+        if (dup2(fdOfStdOut, 1) == -1){
+            perror("smash error: dup failed");
+            return;
+        }
+        if(close(fdOfStdOut) == -1) {
+            perror("smash error: close failed");
+            return;
+        }
         return;
     }
 
     /////return stdout to the original fd
-    try {
-        dup(fdOfStdOut);
-    }catch(...){
+    if (dup(fdOfStdOut) == -1){
         perror("smash error: dup failed");
         return;
     }
