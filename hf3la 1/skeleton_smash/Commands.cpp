@@ -4,6 +4,8 @@
 #include <vector>
 #include <sstream>
 #include <sys/wait.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 #include <iomanip>
 #include "Commands.h"
 #include <fcntl.h>
@@ -143,6 +145,7 @@ SmallShell::SmallShell() {
 // TODO: add your implementation
     prompt = "smash";
     lastDir = nullptr;
+    runningInForeground = -1;
 }
 
 SmallShell::~SmallShell() {
@@ -200,11 +203,24 @@ Command * SmallShell::CreateCommand(const char* cmd_line) {
     }
     else {
         ////////////
+        pid_t currPid = 0;
 
-        pid_t currPid = fork();
+        if(_isBackgroundComamnd(cmd_line)){
+            currPid = fork();
+        }
+        else{
+            runningInForeground = fork();
+            currPid = runningInForeground;
+        }
+
+
+
         int status;
         if (currPid == 0){
-
+            if (setpgrp() == -1){
+                perror("smash error: setpgrp failed");
+                exit(1);
+            }
             return new ExternalCommand(cmd_line);
 
         }
@@ -218,6 +234,7 @@ Command * SmallShell::CreateCommand(const char* cmd_line) {
             }
             else{
                 pid_t childProcess = waitpid(currPid, &status,0);
+                runningInForeground = -1;
                 if(childProcess == -1){
                     perror( "smash error: waitpid failed");
                 }
@@ -285,8 +302,16 @@ BuiltInCommand::BuiltInCommand(const char *cmd_line) : Command(cmd_line){}
 /////////////////////////Change Directory/////////////////////////////////////////////
 
 ChangeDirCommand::ChangeDirCommand(const char *cmd_line, char *plastPwd) : BuiltInCommand(cmd_line) {
-    lastDir = plastPwd ;
+    if(plastPwd == nullptr) {
+        lastDir = nullptr;
+        return;
+    }
+    lastDir = new char[MAX_CHARACTERS_INDIR+1] ;
+    strcpy(lastDir , plastPwd);
 }
+
+
+
 
 void ChangeDirCommand::execute() {
 
@@ -310,10 +335,14 @@ void ChangeDirCommand::execute() {
             size_t BufferSize = (size_t) (MAX_CHARACTERS_INDIR+1);
             buffer = new char[BufferSize];
             if(getcwd(buffer,BufferSize) != nullptr){
-                if (chdir(lastDir) == -1) perror("smash error: chdir failed");                                                                                           ///////////////check if failed later
+                if (chdir(lastDir) == -1){
+                    perror("smash error: chdir failed");
+                    if(buffer != nullptr) delete buffer;
+                    return;
+                }                                                                                            ///////////////check if failed later
                 if (lastDir) {
                     // delete SmallShell::getInstance().lastDir;
-                    lastDir = buffer;
+                    strcpy(lastDir,buffer);
                     strcpy(SmallShell::getInstance().lastDir,buffer);
                     if(buffer != nullptr) delete buffer;
                     return;
@@ -334,11 +363,18 @@ void ChangeDirCommand::execute() {
         buffer = new char[BufferSize];
         if(getcwd(buffer,BufferSize) != nullptr){
             char* parentPath = GetParentDirectory(buffer);
+            if(*parentPath == '\0'){
+                parentPath[0] = '/';
+                parentPath[1] = '\0';
+            }
             if(chdir(parentPath) == -1){
                 perror("smash error: chdir failed");
+                return;
             }                                                                                         ////////////SYSFAIL check
-            // if(lastDir != nullptr) delete SmallShell::getInstance().lastDir;
-            lastDir = buffer;
+
+
+            if(lastDir == nullptr) lastDir = new char[MAX_CHARACTERS_INDIR+1];
+            strcpy(lastDir,buffer);
             if(SmallShell::getInstance().lastDir == nullptr) SmallShell::getInstance().lastDir = new char[MAX_CHARACTERS_INDIR+1];
 
             strcpy(SmallShell::getInstance().lastDir,buffer);
@@ -352,17 +388,31 @@ void ChangeDirCommand::execute() {
     }
 
     else{
+
+
+
         size_t BufferSize = (size_t) (MAX_CHARACTERS_INDIR+1);
         buffer = new char[BufferSize];
         if(getcwd(buffer,BufferSize) != nullptr){
-            lastDir = buffer;
+            //lastDir = buffer;
             if(SmallShell::getInstance().lastDir == nullptr) SmallShell::getInstance().lastDir = new char[MAX_CHARACTERS_INDIR+1];
             strcpy(SmallShell::getInstance().lastDir,buffer);
         }
         else{
             perror("smash error: getcwd failed");
         }
-        if (chdir(arguments[1]) == -1) perror("smash error: chdir failed");
+
+
+        if (chdir(arguments[1]) == -1) {
+            perror("smash error: chdir failed");
+            if(lastDir != nullptr) {
+                strcpy(SmallShell::getInstance().lastDir, lastDir);
+            }
+            else{
+                SmallShell::getInstance().lastDir = nullptr;
+            }
+            return;
+        }
     }
     return;
 }
@@ -419,35 +469,49 @@ KillCommand::KillCommand(const char *cmd_line, JobsList *jobs) : BuiltInCommand(
 
 void KillCommand::execute() {
 
-    ////Arguments are invalid
 
-    if(numArgs != 3){
-        cerr << "smash error: kill:  invalid arguments"<< endl;
-        return;
-    }
-
-    if(arguments[1][0] != '-') {
-        cerr << "smash error: kill:  invalid arguments"<< endl;
-        return;
-    }
     int job_id = 0;
     int signum = 0;
 
     try{
         job_id = stoi(arguments[2]);
+    }
+    catch(...){
+        cerr << "smash error: kill: invalid arguments"<< endl;
+        return;
+    }
+
+    JobsList::JobEntry* my_job = jobs->getJobById(job_id);
+
+    try{
         signum = stoi(&(arguments[1][1]));
     }
     catch(...){
-        cerr << "smash error: kill:  invalid arguments"<< endl;
+        if(my_job == nullptr) {
+            cerr << "smash error: kill: job-id " << job_id << " does not exist" << endl;
+            return;
+        }
+        cerr << "smash error: kill: invalid arguments"<< endl;
         return;
     }
 
 
-    JobsList::JobEntry* my_job = jobs->getJobById(job_id);
-
     /// Job Not Found
     if(my_job == nullptr) {
         cerr << "smash error: kill: job-id " << job_id << " does not exist" << endl;
+        return;
+    }
+
+
+    ////Arguments are invalid
+
+    if(numArgs != 3){
+        cerr << "smash error: kill: invalid arguments"<< endl;
+        return;
+    }
+
+    if(arguments[1][0] != '-') {
+        cerr << "smash error: kill: invalid arguments"<< endl;
         return;
     }
 
@@ -472,7 +536,7 @@ void QuitCommand::execute() {
 
     ///Kill not specified Or Argument Specified but not kill
     if(killArg == NULL  || strcmp(killArg,"kill") != 0){
-        exit(1);
+        exit(0);
     }
 
 
@@ -487,7 +551,7 @@ void QuitCommand::execute() {
             cout << (*iterator)->processId << ": " << (*iterator)->cmd_line->cmd_line << endl;
             kill((*iterator)->processId, 9);
         }
-        exit(1);
+        exit(0);
     }
 }
 
@@ -520,17 +584,21 @@ void ForegroundCommand::execute() {
 
             cout<<(*maxElement)->cmd_line->cmd_line<<" "<<(*maxElement)->processId<<endl;
 
+            SmallShell::getInstance().runningInForeground = (*maxElement)->processId ;
             ///Wait Failed
             if(waitpid((*maxElement)->processId,&status,0) == -1){
+                SmallShell::getInstance().runningInForeground = -1;
                 perror("smash error: waitpid failed");
                 return;
             }
+
+            SmallShell::getInstance().runningInForeground = -1;
 
             jobs->removeJobById((*maxElement)->jobId);
             return;
 
         } else {
-            cerr<<"smash error: fg:jobs list is empty"<<endl;
+            cerr<<"smash error: fg: jobs list is empty"<<endl;
             return;
         }
     }
@@ -565,11 +633,16 @@ void ForegroundCommand::execute() {
 
             cout<< (*iterator)->cmd_line->cmd_line <<" " <<(*iterator)->processId << endl;
 
+
+            SmallShell::getInstance().runningInForeground = (*iterator)->processId ;
             ///Wait Failed
             if(waitpid((*iterator)->processId,&status,0) == -1){
                 perror("smash error: waitpid failed");
+                SmallShell::getInstance().runningInForeground = -1;
                 return;
             }
+
+            SmallShell::getInstance().runningInForeground = -1;
 
             jobs->removeJobById((*iterator)->jobId);
             return;
@@ -600,7 +673,7 @@ void JobsCommand::execute() {
 
 //////////////////////JobsList///////////////////////////////////////////////
 
-JobsList::JobsList() : numOfJobs(0), listOfJobs(){}
+JobsList::JobsList() :  listOfJobs(){}
 JobsList::~JobsList() noexcept {}
 
 
@@ -618,17 +691,17 @@ void JobsList::printJobsList(){
 void JobsList::addJob(Command *cmd,pid_t newJobpid ,bool isStopped) {
 
     removeFinishedJobs();
-    numOfJobs = listOfJobs.size();
+    //numOfJobs = listOfJobs.size();
 
     ///Find Maximum job in list
     int MaxJobId = 0;
-    auto maxElement = std::max_element(listOfJobs.begin(), listOfJobs.end());
-    if (maxElement != listOfJobs.end()) {
-        MaxJobId = (*maxElement)->jobId;
+    // auto maxElement = std::max_element(listOfJobs.begin(), listOfJobs.end());
+    //auto maxElement = listOfJobs.begin();
+
+    for(auto iterator = listOfJobs.begin() ; iterator != listOfJobs.end() ; ++iterator){
+        if (MaxJobId < (*iterator)->jobId ) MaxJobId = (*iterator)->jobId;
     }
-    else {
-        MaxJobId=0;
-    }
+
 
     ///////adding the new job
     listOfJobs.push_back(std::shared_ptr<JobEntry>(new JobEntry(MaxJobId+1,newJobpid, cmd)));
@@ -729,13 +802,12 @@ void ExternalCommand::execute() {
 
     //////////Command is Complex
     if(IsComplexExternalCmd(cmd_line)){
-        char* cmd_line_not_const = new char[COMMAND_ARGS_MAX_LENGTH+1];
-        strcpy(cmd_line_not_const, cmd_line);
-        char CFlag[3] = {'-','c','\0'};
-        char* argv[] = { CFlag, cmd_line_not_const , nullptr};           ///////////////////////////////////
-        if(execv("/bin/bash" , argv)==-1) {
+        //char* cmd_line_not_const = new char[COMMAND_ARGS_MAX_LENGTH+1];
+        //strcpy(cmd_line_not_const, cmd_line);
+        const char* argv[] = { "/bin/bash" ,"-c", cmd_line , nullptr};           ///////////////////////////////////
+        if(execv(argv[0] , (char **) argv)==-1) {
             perror("smash error: execv failed");
-            exit(EXIT_FAILURE);
+            exit(1);
         }
 
     }
@@ -745,7 +817,7 @@ void ExternalCommand::execute() {
         int res = execvp(arguments[0] ,arguments);
         if(res == -1) {
             perror("smash error: execvp failed");
-            exit(EXIT_FAILURE);
+            exit(1);
         }
 
 
@@ -759,7 +831,6 @@ void ExternalCommand::execute() {
 ///Redirection Command////////////////////////
 
 void cutCMD(const char* cmd_line, char* ret_cmd){
-    int i=0;
     std::string cmd_new(cmd_line);
     cmd_new = cmd_new.substr(0, cmd_new.find_first_of('>')-1);
     cmd_new = _trim(cmd_new);
@@ -864,8 +935,36 @@ void RedirectionCommand::cleanup() {
 
 ////////////////////////Chmod Command//////////////////////////////////////
 
+ChmodCommand::ChmodCommand(const char *cmd_line) : BuiltInCommand(cmd_line){}
+
+void ChmodCommand::execute(){
+
+    if(numArgs != 3 ){
+        cerr <<"smash error: chmod: invalid arguments"<< endl;
+        return;
+    }
+
+    mode_t mode;
+
+    try{
+        mode = (mode_t) stoi(arguments[1], nullptr, 8);
+    }
+    catch(...){
+        cerr <<"smash error: chmod: invalid arguments"<<endl ;
+        return;
+    }
+
+    if(chmod(arguments[2], mode) == -1){
+        perror("smash error: chmod failed");
+        return;
+    }
 
 
+
+}
+
+
+////////Signals Ctrl+C/////////////////////////////
 
 
 

@@ -66,7 +66,9 @@ class ChangeDirCommand : public BuiltInCommand {
     char* lastDir;
 public:
     ChangeDirCommand(const char* cmd_line, char* plastPwd);
-    virtual ~ChangeDirCommand() {}
+    virtual ~ChangeDirCommand() {
+        delete lastDir;
+    }
     void execute() override;
 };
 
@@ -135,7 +137,7 @@ public:
 
 
     std::vector<std::shared_ptr<JobEntry>> listOfJobs;
-    int numOfJobs ;
+    // int numOfJobs ;
 
 public:
     JobsList();
@@ -214,6 +216,7 @@ public:
     char* lastDir;
     std::string prompt ;
     static pid_t smashPid ;
+    pid_t runningInForeground ;
     Command *CreateCommand(const char* cmd_line);
     SmallShell(SmallShell const&)      = delete; // disable copy ctor
     void operator=(SmallShell const&)  = delete; // disable = operator
