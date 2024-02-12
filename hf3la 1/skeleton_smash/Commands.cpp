@@ -880,7 +880,7 @@ void RedirectionCommand::prepare() {
 
     ////override = 1
     if (checkRedirection(cmd_line) == 1){
-        output = open(arguments[numArgs-1],O_WRONLY | O_CREAT, 0644);
+        output = open(arguments[numArgs-1],O_WRONLY | O_CREAT | O_TRUNC , 0644);
     }
         /////append = 2
     else if(checkRedirection(cmd_line) == 2) {
